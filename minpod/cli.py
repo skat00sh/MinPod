@@ -12,20 +12,42 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
+from minpod.ui import print_banner, print_error
+
 DEFAULT_OUTPUT = Path("output/sample.mp3")
 DEFAULT_MERGE_OUTPUT = Path("output/merged.mp3")
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "merge":
-        return _merge_main(argv[1:])
-    return _speak_main(argv)
+    try:
+        print_banner()
+        if argv and argv[0] == "merge":
+            return _merge_main(argv[1:])
+        return _speak_main(argv)
+    except KeyboardInterrupt:
+        print_error("interrupted")
+        return 130
+    except (FileNotFoundError, IsADirectoryError, ValueError, RuntimeError) as exc:
+        print_error(_friendly_error(exc))
+        return 1
+
+
+def _friendly_error(exc: BaseException) -> str:
+    text = str(exc).strip()
+    if text.startswith("[Errno"):
+        quoted = text.rsplit(": ", 1)[-1].strip().strip("'\"")
+        if isinstance(exc, FileNotFoundError):
+            return f"file not found: {quoted}"
+        if isinstance(exc, IsADirectoryError):
+            return f"not a file: {quoted}"
+    return text
 
 
 def _speak_main(argv: list[str]) -> int:
     from minpod.engine import TEST_SENTENCE, get_engine
     from minpod.export import to_mp3
+    from minpod.progress import ProgressPrinter
     from minpod.script import load_script
 
     parser = argparse.ArgumentParser(
@@ -41,17 +63,33 @@ def _speak_main(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
 
-    engine = get_engine("kokoro")
+    beats = None
+    script_path = None
     if args.script:
         script_path = Path(args.script)
+        if not script_path.exists():
+            raise FileNotFoundError(f"file not found: {script_path}")
+        if not script_path.is_file():
+            raise IsADirectoryError(f"not a file: {script_path}")
         beats = load_script(script_path)
         if not beats:
-            parser.error(f"no spoken text found in {script_path}")
-        result = engine.synthesize_beats(beats)
-        output = Path(args.output) if args.output else Path("output") / f"{script_path.stem}.mp3"
-    else:
-        result = engine.synthesize(args.text or TEST_SENTENCE)
-        output = Path(args.output) if args.output else DEFAULT_OUTPUT
+            raise ValueError(f"no spoken text found in {script_path}")
+
+    progress = ProgressPrinter()
+    progress.set_text("loading model...")
+    try:
+        engine = get_engine("kokoro")
+        if beats is not None and script_path is not None:
+            result = engine.synthesize_beats(beats, on_progress=progress.update)
+            output = Path(args.output) if args.output else Path("output") / f"{script_path.stem}.mp3"
+        else:
+            result = engine.synthesize(
+                args.text or TEST_SENTENCE,
+                on_progress=progress.update,
+            )
+            output = Path(args.output) if args.output else DEFAULT_OUTPUT
+    finally:
+        progress.close()
 
     written = to_mp3(result.samples, result.sample_rate, output)
     print(result.metrics.format(str(written)))
@@ -87,11 +125,11 @@ def _merge_main(argv: list[str]) -> int:
     paths = collect_audio_paths(args.inputs, skip=args.output)
     written = merge_mp3(paths, args.output, gap_s=args.gap)
     duration = audio_duration_s(written)
-    print(f"output: {written}")
-    print(f"files: {len(paths)}")
-    print(f"gap: {args.gap:.1f}s")
+    print(f"output  {written}")
+    print(f"files   {len(paths)}")
+    print(f"gap     {args.gap:.1f}s")
     if duration is not None:
-        print(f"audio: {duration:.1f}s")
+        print(f"audio   {duration:.1f}s")
     return 0
 
 

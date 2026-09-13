@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -10,6 +11,7 @@ import numpy as np
 
 from minpod.devices import detect_device, device_label
 from minpod.metrics import PipelineMetrics, ResourceMonitor
+from minpod.progress import estimate_audio_s
 from minpod.script import Beat
 
 SAMPLE_RATE = 24000
@@ -28,9 +30,17 @@ class SynthesisResult:
 
 
 class TTSEngine(Protocol):
-    def synthesize(self, text: str) -> SynthesisResult: ...
+    def synthesize(
+        self,
+        text: str,
+        on_progress: Callable[[float, float], None] | None = None,
+    ) -> SynthesisResult: ...
 
-    def synthesize_beats(self, beats: list[Beat]) -> SynthesisResult: ...
+    def synthesize_beats(
+        self,
+        beats: list[Beat],
+        on_progress: Callable[[float, float], None] | None = None,
+    ) -> SynthesisResult: ...
 
 
 def _to_numpy(audio: object) -> np.ndarray:
@@ -88,28 +98,60 @@ class KokoroEngine:
         )
         self.load_s = time.perf_counter() - started
 
-    def synthesize(self, text: str) -> SynthesisResult:
-        return self.synthesize_beats([Beat(kind="speech", text=text)])
+    def synthesize(
+        self,
+        text: str,
+        on_progress: Callable[[float, float], None] | None = None,
+    ) -> SynthesisResult:
+        return self.synthesize_beats(
+            [Beat(kind="speech", text=text)],
+            on_progress=on_progress,
+        )
 
-    def synthesize_beats(self, beats: list[Beat]) -> SynthesisResult:
+    def synthesize_beats(
+        self,
+        beats: list[Beat],
+        on_progress: Callable[[float, float], None] | None = None,
+    ) -> SynthesisResult:
         monitor = ResourceMonitor()
         monitor.start()
         started = time.perf_counter()
         ttft_s = 0.0
         chunks: list[np.ndarray] = []
         heard_speech = False
+        done_s = 0.0
+        speech_s = 0.0
+        words_done = 0
+        total_words = sum(len(beat.text.split()) for beat in beats if beat.kind != "pause")
+        total_pause = sum(beat.seconds for beat in beats if beat.kind == "pause")
+        estimated_s = estimate_audio_s(beats)
+        if on_progress is not None:
+            on_progress(0.0, estimated_s)
 
         for beat in beats:
             if beat.kind == "pause":
-                chunks.append(_silence(beat.seconds))
+                silence = _silence(beat.seconds)
+                chunks.append(silence)
+                done_s += beat.seconds
+                if on_progress is not None:
+                    on_progress(done_s, max(estimated_s, done_s))
                 continue
             if not beat.text.strip():
                 continue
-            for _gs, _ps, audio in self.pipeline(beat.text, voice=self.voice):
+            for graphemes, _ps, audio in self.pipeline(beat.text, voice=self.voice):
                 if not heard_speech:
                     ttft_s = time.perf_counter() - started
                     heard_speech = True
-                chunks.append(_to_numpy(audio))
+                samples = _to_numpy(audio)
+                chunks.append(samples)
+                chunk_s = len(samples) / SAMPLE_RATE
+                speech_s += chunk_s
+                done_s += chunk_s
+                words_done += len(graphemes.split())
+                if words_done > 0 and total_words > 0:
+                    estimated_s = (speech_s / words_done) * total_words + total_pause
+                if on_progress is not None:
+                    on_progress(done_s, max(estimated_s, done_s))
 
         gen_s = time.perf_counter() - started
         cpu_pct, ram_gb, vram_gb = monitor.stop()

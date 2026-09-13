@@ -23,19 +23,20 @@ class PipelineMetrics:
         return self.gen_s / self.audio_s
 
     def format(self, output_path: str) -> str:
-        lines = [
-            f"output: {output_path}",
-            f"device: {self.device}",
-            f"load: {self.load_s:.1f}s",
-            f"ttft: {self.ttft_s:.2f}s",
-            f"gen: {self.gen_s:.1f}s  rtf {self.rtf:.2f}",
-            f"audio: {self.audio_s:.1f}s",
-            f"cpu: {self.cpu_pct:.0f}%",
-            f"ram: {self.ram_gb:.1f} GB",
+        rows = [
+            ("output", output_path),
+            ("device", self.device),
+            ("load", f"{self.load_s:.1f}s"),
+            ("ttft", f"{self.ttft_s:.2f}s"),
+            ("gen", f"{self.gen_s:.1f}s  rtf {self.rtf:.2f}"),
+            ("audio", f"{self.audio_s:.1f}s"),
+            ("cpu", f"{self.cpu_pct:.0f}%"),
+            ("ram", f"{self.ram_gb:.1f} GB"),
         ]
         if self.vram_gb is not None:
-            lines.append(f"vram: {self.vram_gb:.1f} GB")
-        return "\n".join(lines)
+            rows.append(("vram", f"{self.vram_gb:.1f} GB"))
+        width = max(len(name) for name, _ in rows)
+        return "\n".join(f"{name:<{width}}  {value}" for name, value in rows)
 
 
 class ResourceMonitor:

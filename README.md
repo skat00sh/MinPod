@@ -26,7 +26,7 @@ uv run minpod --text "Hello from MinPod." --output output/hello.mp3
 uv run minpod --script resources/phase1_hld_script.md
 ```
 
-`--script` reads a markdown or text file. If the markdown has a `## Narration` heading, only that section is spoken. Bracket labels like `[Cold open]` are skipped, and `---` becomes a short pause. Output defaults to `output/<filename>.mp3`.
+`--script` reads a markdown or text file. If the markdown has a `## Narration` heading, only that section is spoken. Bracket labels like `[Cold open]` are skipped, and `---` becomes a short pause. Output defaults to `output/<filename>.mp3`. While speaking, stderr shows `audio generated / ~estimated total`, updating as each chunk finishes.
 
 Merge existing MP3s (does not load the TTS model):
 
